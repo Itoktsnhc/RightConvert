@@ -1,0 +1,101 @@
+# Builds RightConvert for Windows and publishes a GitHub release when a tag
+# such as v0.1.0 is pushed. The tag must match the version in mygo.json, and
+# CHANGELOG.md must have a "## 0.1.0" section, which becomes the notes.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # the release, and the uploads to it
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      # Writes a test key under HKCU of the runner; the ffmpeg tests skip
+      # when the runner has no ffmpeg.
+      - run: go test ./...
+        env:
+          CGO_ENABLED: "0"
+
+  draft-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the tag against mygo.json
+        run: |
+          want="v$(jq -r .version mygo.json)"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match mygo.json ($want)"
+            exit 1
+          fi
+      - name: Take the notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '/^## /{p = ($2 == v); next} p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "RightConvert $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+
+  build:
+    needs: [test, draft-release]
+    name: Windows ${{ matrix.arch }}
+    # MyGo needs no cgo, so Linux builds the Windows apps; NSIS makes the
+    # installers.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Build
+        run: go tool mygo build -platform "windows/${{ matrix.arch }}"
+      - name: Upload the installer and the portable zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dir="build/windows-${{ matrix.arch }}"
+          portable="$dir/RightConvert-$version-windows-${{ matrix.arch }}-portable.zip"
+          zip -j "$portable" "$dir/RightConvert.exe"
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$dir"/rightconvert-setup-*.exe "$portable"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add checksums and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/assets"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir "$dir" \
+            --pattern '*.exe' --pattern '*.zip'
+          (cd "$dir" && sha256sum *.exe *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "$dir/SHA256SUMS.txt"
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
