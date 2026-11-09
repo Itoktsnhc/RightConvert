@@ -1,0 +1,9 @@
+{
+  "name": "RightConvert",
+  "identifier": "io.github.rightconvert",
+  "version": "0.1.0",
+  "out": "build",
+  "windows": {
+    "installerInclude": "installer/installer.nsh"
+  }
+}

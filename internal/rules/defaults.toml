@@ -1,0 +1,114 @@
+# RightConvert built-in rules.
+#
+# Each rule turns files whose extension is in `from` into a `.{to}` file by
+# running ffmpeg with `args`. Placeholders in args:
+#   {input}  full path of the source file
+#   {output} full path of the file to write
+#   {dir}    directory of the source file
+#   {name}   source file name without extension
+#
+# `to = "auto"` names the output after the codec of the first audio stream
+# (flac -> .flac, aac -> .m4a, mp3 -> .mp3, ...), for rules that copy it.
+#
+# Rules in %APPDATA%\RightConvert\rules.toml with the same id replace these;
+# `enabled = false` there hides a built-in rule.
+
+# ---------- Audio ----------
+
+[[rule]]
+id       = "to-mp3"
+label    = "MP3 (320k)"
+from     = ["flac", "wav", "m4a", "aac", "ogg", "opus", "wma", "aiff", "aif", "ape", "alac", "mp4", "mov", "mkv", "webm", "avi", "flv"]
+to       = "mp3"
+encoders = ["libmp3lame"]
+args     = ["-i", "{input}", "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "320k", "-map_metadata", "0", "-id3v2_version", "3", "{output}"]
+
+[[rule]]
+id       = "to-mp3-v0"
+label    = "MP3 (VBR V0)"
+from     = ["flac", "wav", "m4a", "aac", "ogg", "opus", "wma", "aiff", "aif", "ape", "alac", "mp4", "mov", "mkv", "webm", "avi", "flv"]
+to       = "mp3"
+suffix   = "-v0"
+encoders = ["libmp3lame"]
+args     = ["-i", "{input}", "-map", "0:a:0", "-c:a", "libmp3lame", "-q:a", "0", "-map_metadata", "0", "-id3v2_version", "3", "{output}"]
+
+[[rule]]
+id       = "to-flac"
+label    = "FLAC (lossless)"
+from     = ["wav", "aiff", "aif", "ape", "alac", "m4a", "wma", "mp4", "mov", "mkv", "webm"]
+to       = "flac"
+encoders = ["flac"]
+args     = ["-i", "{input}", "-map", "0:a:0", "-c:a", "flac", "-compression_level", "8", "-map_metadata", "0", "{output}"]
+
+[[rule]]
+id       = "to-wav"
+label    = "WAV (16-bit PCM)"
+from     = ["flac", "mp3", "m4a", "aac", "ogg", "opus", "wma", "aiff", "aif", "ape", "alac", "mp4", "mov", "mkv", "webm", "avi", "flv"]
+to       = "wav"
+encoders = ["pcm_s16le"]
+args     = ["-i", "{input}", "-map", "0:a:0", "-c:a", "pcm_s16le", "{output}"]
+
+[[rule]]
+id       = "to-m4a"
+label    = "M4A (AAC 256k)"
+from     = ["flac", "wav", "mp3", "ogg", "opus", "wma", "aiff", "aif", "ape", "mp4", "mov", "mkv", "webm", "avi", "flv"]
+to       = "m4a"
+encoders = ["aac"]
+args     = ["-i", "{input}", "-map", "0:a:0", "-c:a", "aac", "-b:a", "256k", "-map_metadata", "0", "-movflags", "+faststart", "{output}"]
+
+[[rule]]
+id       = "to-ogg"
+label    = "OGG Vorbis (q6)"
+from     = ["flac", "wav", "mp3", "m4a", "aac", "opus", "wma", "aiff", "aif", "ape", "mp4", "mov", "mkv", "webm"]
+to       = "ogg"
+encoders = ["libvorbis"]
+args     = ["-i", "{input}", "-map", "0:a:0", "-c:a", "libvorbis", "-q:a", "6", "-map_metadata", "0", "{output}"]
+
+[[rule]]
+id       = "to-opus"
+label    = "Opus (160k)"
+from     = ["flac", "wav", "mp3", "m4a", "aac", "ogg", "wma", "aiff", "aif", "ape", "mp4", "mov", "mkv", "webm"]
+to       = "opus"
+encoders = ["libopus"]
+args     = ["-i", "{input}", "-map", "0:a:0", "-c:a", "libopus", "-b:a", "160k", "-map_metadata", "0", "{output}"]
+
+# ---------- Video ----------
+
+[[rule]]
+id       = "to-mp4"
+label    = "MP4 (H.264 + AAC)"
+from     = ["mov", "mkv", "webm", "avi", "flv", "wmv", "m4v", "ts", "mts", "3gp"]
+to       = "mp4"
+encoders = ["libx264", "aac"]
+args     = ["-i", "{input}", "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "{output}"]
+
+[[rule]]
+id       = "to-mov"
+label    = "MOV (H.264 + AAC)"
+from     = ["mp4", "mkv", "webm", "avi", "flv", "wmv", "m4v", "ts", "mts", "3gp"]
+to       = "mov"
+encoders = ["libx264", "aac"]
+args     = ["-i", "{input}", "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "{output}"]
+
+[[rule]]
+id       = "remux-mkv"
+label    = "MKV (remux, no re-encode)"
+from     = ["mp4", "mov", "m4v", "webm", "avi", "ts", "mts", "flv"]
+to       = "mkv"
+args     = ["-i", "{input}", "-map", "0", "-c", "copy", "{output}"]
+
+[[rule]]
+id       = "remux-mp4"
+label    = "MP4 (remux, no re-encode)"
+from     = ["mkv", "mov", "m4v", "ts", "mts"]
+to       = "mp4"
+suffix   = "-remux"
+args     = ["-i", "{input}", "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "{output}"]
+
+[[rule]]
+id       = "extract-audio"
+label    = "Extract audio (no re-encode)"
+from     = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "flv", "ts", "mts"]
+to       = "auto"
+suffix   = "-audio"
+args     = ["-i", "{input}", "-vn", "-map", "0:a:0", "-c:a", "copy", "{output}"]
