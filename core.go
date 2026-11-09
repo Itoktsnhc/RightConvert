@@ -76,7 +76,12 @@ func (c *core) locateFFmpeg(done func()) {
 		f, err := convert.Locate(context.Background(), configured, filepath.Dir(exe()))
 		mygo.RunOnMain(func() {
 			c.ffmpeg, c.ffmpegErr, c.locating = f, err, false
-			c.queue = nil // a new ffmpeg, a new runner
+			// Keep the queue, and the jobs the window lists: the jobs that
+			// have not started run with the new ffmpeg.
+			if c.queue != nil && f != nil {
+				c.queue.SetRunner(f.Run)
+				c.queue.SetResolveExt(f.AudioExt)
+			}
 			if done != nil {
 				done()
 			}
@@ -100,7 +105,7 @@ func (c *core) ensureQueue() *convert.Queue {
 				fn()
 			}
 		})
-		c.queue.ResolveExt = f.AudioExt
+		c.queue.SetResolveExt(f.AudioExt)
 	}
 	return c.queue
 }

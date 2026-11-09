@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -278,7 +279,7 @@ func TestQueueAutoExtension(t *testing.T) {
 	q := NewQueue(func(ctx context.Context, r *rules.Rule, input, output string, p func(float64)) error {
 		return os.WriteFile(output, nil, 0o644)
 	}, 1, nil)
-	q.ResolveExt = func(context.Context, string) (string, error) { return "flac", nil }
+	q.SetResolveExt(func(context.Context, string) (string, error) { return "flac", nil })
 	r := &rules.Rule{ID: "x", Label: "x", From: []string{"mp4"}, To: rules.AutoExt, Suffix: "-audio",
 		Args: []string{"-i", "{input}", "{output}"}}
 	j, err := q.Add(r, in)
@@ -294,7 +295,7 @@ func TestQueueAutoExtension(t *testing.T) {
 		t.Errorf("job = %v %q %v", s.State, s.Output, s.Err)
 	}
 
-	q.ResolveExt = func(context.Context, string) (string, error) { return "", errors.New("the file has no audio stream") }
+	q.SetResolveExt(func(context.Context, string) (string, error) { return "", errors.New("the file has no audio stream") })
 	q.Add(r, in)
 	q.Wait()
 	if s := q.Snapshot()[1]; s.State != Failed || s.Output != "" {
@@ -313,7 +314,7 @@ func TestExtractFLACFromMP4(t *testing.T) {
 		"-c:a", "flac", "-shortest")
 	r := (&rules.Set{Rules: rules.Builtin()}).Get("extract-audio")
 	q := NewQueue(f.Run, 1, nil)
-	q.ResolveExt = f.AudioExt
+	q.SetResolveExt(f.AudioExt)
 	if _, err := q.Add(r, src); err != nil {
 		t.Fatal(err)
 	}
@@ -327,5 +328,50 @@ func TestExtractFLACFromMP4(t *testing.T) {
 	}
 	if codec, err := f.AudioCodec(context.Background(), j.Output); codec != "flac" {
 		t.Errorf("output codec %q, %v", codec, err)
+	}
+}
+
+// Locating ffmpeg again replaces the runner of the jobs not started, and
+// keeps every job, the finished ones too.
+func TestQueueSetRunnerKeepsJobs(t *testing.T) {
+	dir := t.TempDir()
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	var used []string
+	runner := func(name string) Runner {
+		return func(ctx context.Context, r *rules.Rule, input, output string, p func(float64)) error {
+			<-gate
+			mu.Lock()
+			used = append(used, name)
+			mu.Unlock()
+			return nil
+		}
+	}
+	q := NewQueue(runner("old"), 1, nil)
+	r := testRule("to-mp3", "mp3", "wav")
+	for _, n := range []string{"a", "b"} {
+		in := filepath.Join(dir, n+".wav")
+		touch(t, in)
+		if _, err := q.Add(r, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Wait for the first job to take the only worker.
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if q.Snapshot()[0].State == Running {
+			break
+		}
+	}
+	q.SetRunner(runner("new"))
+	q.SetWorkers(2)
+	close(gate)
+	q.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(used) != 2 || !slices.Contains(used, "old") || !slices.Contains(used, "new") {
+		t.Errorf("runners used %v, want one old and one new", used)
+	}
+	if s := q.Snapshot(); len(s) != 2 || s[0].State != Done || s[1].State != Done {
+		t.Errorf("jobs after SetRunner: %+v", s)
 	}
 }

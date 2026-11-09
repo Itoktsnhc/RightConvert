@@ -14,9 +14,30 @@ import (
 type queueView struct {
 	core *core
 	jobs []convert.Job // a snapshot, refreshed on the main thread
-	// closeWhenDone records that the window should close once the queue
-	// finishes; set when it was opened from the context menu.
-	closeWhenDone bool
+	// keepOpen keeps the window open once every file converted; it is the
+	// inverse of Settings.CloseWhenDone, which the check box saves.
+	keepOpen bool
+}
+
+func newQueueView(c *core) *queueView {
+	v := &queueView{core: c, keepOpen: !c.settings.CloseWhenDone}
+	v.refresh()
+	return v
+}
+
+// shouldClose reports whether the window closes by itself: the user
+// unchecked 完成后保持窗口打开 and every file converted without errors.
+func (v *queueView) shouldClose() bool {
+	done, failed, active := counts(v.jobs)
+	return !v.keepOpen && active == 0 && failed == 0 && done > 0 && len(v.core.addErrors) == 0
+}
+
+// saveKeepOpen saves the check box, so that later conversions start with it.
+func (v *queueView) saveKeepOpen() {
+	v.core.settings.CloseWhenDone = !v.keepOpen
+	if err := v.core.dir.Save(v.core.settings); err != nil {
+		v.core.addErrors = append(v.core.addErrors, "保存设置失败："+err.Error())
+	}
 }
 
 func (v *queueView) refresh() {
@@ -74,6 +95,7 @@ func (v *queueView) view(c *ui.Context) {
 			if ui.Button(c, "设置…").Clicked() {
 				v.core.openSettings()
 			}
+			ui.Checkbox(c, &v.keepOpen, "完成后保持窗口打开").AlignSelf(ui.Center).OnChange(v.saveKeepOpen)
 			ui.Spacer(c)
 			if done+failed > 0 && ui.Button(c, "清除已完成").Clicked() {
 				v.core.queue.ClearFinished()

@@ -174,6 +174,9 @@ func (v *settingsView) ffmpegTab(c *ui.Context) {
 			core.settings.FFmpeg = strings.Trim(strings.TrimSpace(v.ffmpegPath), `"`)
 			core.settings.Workers = int(v.workers)
 			err := core.dir.Save(core.settings)
+			if core.queue != nil {
+				core.queue.SetWorkers(core.settings.EffectiveWorkers())
+			}
 			v.setStatus(err, "已保存")
 			core.locateFFmpeg(func() { core.settingsWin.Invalidate() })
 		}

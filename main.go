@@ -124,8 +124,7 @@ func (c *core) openQueue() {
 		c.queueWin.Focus()
 		return
 	}
-	c.queueView = &queueView{core: c, closeWhenDone: c.settings.CloseWhenDone}
-	c.queueView.refresh()
+	c.queueView = newQueueView(c)
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Title: "RightConvert", Width: 640, Height: 460, MinWidth: 420, MinHeight: 300,
 		StateKey: "queue",
@@ -156,24 +155,23 @@ func (c *core) openQueue() {
 		c.redrawMu.Lock()
 		c.redraw = nil
 		c.redrawMu.Unlock()
+		// The jobs stay, done ones too, for the window to list when it
+		// opens again: only 清除已完成 drops them.
 		c.queueWin, c.queueView = nil, nil
 		c.addErrors = nil
-		if c.queue != nil {
-			c.queue.ClearFinished()
-		}
 	})
 }
 
 // updateQueue refreshes the queue window from the queue, on the main
-// thread, and closes it when every file converted and the user asked so.
+// thread, and closes it when every file converted and the user unchecked
+// 完成后保持窗口打开. A failure keeps it open, for the user to read.
 func (c *core) updateQueue() {
 	if c.queueWin == nil {
 		return
 	}
 	v := c.queueView
 	v.refresh()
-	done, failed, active := counts(v.jobs)
-	if v.closeWhenDone && active == 0 && failed == 0 && done > 0 && len(c.addErrors) == 0 {
+	if v.shouldClose() {
 		c.queueWin.Close()
 		return
 	}

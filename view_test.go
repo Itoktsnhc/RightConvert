@@ -82,3 +82,54 @@ func TestSettingsViewTabs(t *testing.T) {
 		t.Errorf("menu tab: %q", tt.Texts())
 	}
 }
+
+func TestQueueViewKeepOpen(t *testing.T) {
+	dir := config.Dir(t.TempDir())
+	c := newCore(dir)
+	c.queue = convert.NewQueue(func(context.Context, *rules.Rule, string, string, func(float64)) error { return nil }, 1, nil)
+	v := newQueueView(c)
+	if !v.keepOpen {
+		t.Fatal("keep open is not the default")
+	}
+	tt := ui.NewTester(v.view, 640, 460)
+	if err := tt.Click("完成后保持窗口打开"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if v.keepOpen {
+		t.Fatal("click did not uncheck")
+	}
+	if s, err := dir.Load(); err != nil || !s.CloseWhenDone {
+		t.Errorf("saved %+v, %v", s, err)
+	}
+	if again := newQueueView(newCore(dir)); again.keepOpen {
+		t.Error("a new window ignores the saved choice")
+	}
+}
+
+func TestQueueViewShouldClose(t *testing.T) {
+	job := func(s convert.State) convert.Job { return convert.Job{State: s} }
+	cases := []struct {
+		keepOpen bool
+		jobs     []convert.Job
+		addErr   bool
+		want     bool
+	}{
+		{true, []convert.Job{job(convert.Done)}, false, false},
+		{false, []convert.Job{job(convert.Done)}, false, true},
+		{false, []convert.Job{job(convert.Done), job(convert.Running)}, false, false},
+		{false, []convert.Job{job(convert.Done), job(convert.Failed)}, false, false},
+		{false, []convert.Job{job(convert.Done)}, true, false},
+		{false, nil, false, false},
+	}
+	for i, tc := range cases {
+		c := &core{}
+		if tc.addErr {
+			c.addErrors = []string{"x"}
+		}
+		v := &queueView{core: c, keepOpen: tc.keepOpen, jobs: tc.jobs}
+		if got := v.shouldClose(); got != tc.want {
+			t.Errorf("case %d: shouldClose = %v, want %v", i, got, tc.want)
+		}
+	}
+}

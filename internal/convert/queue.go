@@ -46,18 +46,17 @@ type Runner func(ctx context.Context, r *rules.Rule, input, output string, progr
 
 // Queue runs jobs, at most Workers at a time.
 type Queue struct {
-	// ResolveExt picks the output extension of rules whose To is "auto";
-	// FFmpeg.AudioExt is one. Set it before adding jobs.
-	ResolveExt func(ctx context.Context, input string) (string, error)
-
-	run      Runner
-	changed  func()
-	mu       sync.Mutex
-	jobs     []*Job
-	reserved map[string]bool // outputs of queued and running jobs
-	sem      chan struct{}
-	nextID   int
-	wg       sync.WaitGroup
+	changed func()
+	mu      sync.Mutex
+	// run, resolveExt and sem are read when a job starts, so that setting
+	// them affects the jobs that have not started.
+	run        Runner
+	resolveExt func(ctx context.Context, input string) (string, error)
+	jobs       []*Job
+	reserved   map[string]bool // outputs of queued and running jobs
+	sem        chan struct{}
+	nextID     int
+	wg         sync.WaitGroup
 }
 
 // NewQueue returns a queue running run with the given number of workers,
@@ -70,6 +69,30 @@ func NewQueue(run Runner, workers int, changed func()) *Queue {
 		changed = func() {}
 	}
 	return &Queue{run: run, changed: changed, reserved: map[string]bool{}, sem: make(chan struct{}, workers)}
+}
+
+// SetRunner replaces how jobs convert, as when ffmpeg was located again;
+// jobs already running keep theirs.
+func (q *Queue) SetRunner(run Runner) {
+	q.mu.Lock()
+	q.run = run
+	q.mu.Unlock()
+}
+
+// SetResolveExt sets how the output extension of rules whose To is "auto"
+// is picked; FFmpeg.AudioExt is one.
+func (q *Queue) SetResolveExt(fn func(ctx context.Context, input string) (string, error)) {
+	q.mu.Lock()
+	q.resolveExt = fn
+	q.mu.Unlock()
+}
+
+// SetWorkers changes how many jobs run at once, for the jobs that have not
+// started.
+func (q *Queue) SetWorkers(n int) {
+	q.mu.Lock()
+	q.sem = make(chan struct{}, max(1, n))
+	q.mu.Unlock()
 }
 
 // Add queues input for conversion by r. It fails when the rule does not
@@ -139,15 +162,26 @@ func (q *Queue) work(ctx context.Context, j *Job) {
 		q.mu.Unlock()
 		q.changed()
 	}()
+	q.mu.Lock()
+	sem := q.sem
+	q.mu.Unlock()
 	select {
-	case q.sem <- struct{}{}:
+	case sem <- struct{}{}:
 	case <-ctx.Done():
 		q.set(j, func() { j.State = Canceled })
 		return
 	}
-	defer func() { <-q.sem }()
+	defer func() { <-sem }()
+	q.mu.Lock()
+	run, resolve := q.run, q.resolveExt
+	q.mu.Unlock()
 	if j.Output == "" {
-		ext, err := q.resolveExt(ctx, j.Input)
+		if resolve == nil {
+			resolve = func(context.Context, string) (string, error) {
+				return "", errors.New(`no way to tell the output format of to = "auto"`)
+			}
+		}
+		ext, err := resolve(ctx, j.Input)
 		if err != nil {
 			q.set(j, func() {
 				if ctx.Err() != nil {
@@ -161,7 +195,7 @@ func (q *Queue) work(ctx context.Context, j *Job) {
 		q.set(j, func() { j.Output = q.reserve(j.Input, j.Rule.Suffix, ext) })
 	}
 	q.set(j, func() { j.State, j.Progress = Running, 0 })
-	err := q.run(ctx, j.Rule, j.Input, j.Output, func(p float64) {
+	err := run(ctx, j.Rule, j.Input, j.Output, func(p float64) {
 		q.set(j, func() { j.Progress = p })
 	})
 	q.set(j, func() {
@@ -174,13 +208,6 @@ func (q *Queue) work(ctx context.Context, j *Job) {
 			j.State, j.Progress = Done, 1
 		}
 	})
-}
-
-func (q *Queue) resolveExt(ctx context.Context, input string) (string, error) {
-	if q.ResolveExt == nil {
-		return "", errors.New(`no way to tell the output format of to = "auto"`)
-	}
-	return q.ResolveExt(ctx, input)
 }
 
 func (q *Queue) set(j *Job, fn func()) {
